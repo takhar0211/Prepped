@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-[#0a0a0f] text-slate-200;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)];
+  }
+  
+  .glass-hover {
+    @apply hover:bg-white/10 transition-all duration-300;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400;
+  }
+
+  .btn-primary {
+    @apply px-6 py-2.5 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-medium 
+           hover:shadow-[0_0_20px_rgba(79,70,229,0.4)] transition-all duration-300 active:scale-95;
+  }
+
+  .leetcode-description p {
+    @apply mb-4 leading-relaxed;
+  }
+  .leetcode-description code {
+    @apply bg-black/20 px-1.5 py-0.5 rounded border border-white/5 font-mono text-[13px] text-sky-200;
+  }
+  .leetcode-description pre {
+    @apply bg-black/30 p-3 rounded-xl border border-white/5 font-mono text-xs mb-4 text-slate-300;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    overflow-x: hidden !important;
+  }
+  .leetcode-description pre code {
+    @apply bg-transparent p-0 border-none text-inherit;
+  }
+  .leetcode-description strong {
+    @apply font-bold text-slate-200;
+  }
+  .leetcode-description ul {
+    @apply list-disc list-inside mb-4 space-y-1;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

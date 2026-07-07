@@ -26,9 +26,11 @@ supabase = None
 if supabase_url and supabase_key:
     try:
         from supabase import create_client
+
         supabase = create_client(supabase_url, supabase_key)
     except Exception as e:
         st.error(f"Failed to initialize Supabase client: {e}")
+
 
 # ── Auth Helpers ─────────────────────────────────────────────
 def signup_user(email, password, leetcode_username=""):
@@ -38,26 +40,32 @@ def signup_user(email, password, leetcode_username=""):
         res = supabase.auth.sign_up({"email": email, "password": password})
         if res.user:
             # Create profile
-            supabase.table("user_profiles").insert({
-                "user_id": res.user.id,
-                "email": email,
-                "leetcode_username": leetcode_username
-            }).execute()
+            supabase.table("user_profiles").insert(
+                {
+                    "user_id": res.user.id,
+                    "email": email,
+                    "leetcode_username": leetcode_username,
+                }
+            ).execute()
             return res.user, None
         return None, "Signup failed. Please try again."
     except Exception as e:
         return None, str(e)
 
+
 def login_user(email, password):
     if not supabase:
         return None, "Supabase not configured"
     try:
-        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        res = supabase.auth.sign_in_with_password(
+            {"email": email, "password": password}
+        )
         if res.user:
             return res.user, None
         return None, "Invalid credentials."
     except Exception as e:
         return None, str(e)
+
 
 def logout_user():
     if supabase:
@@ -65,28 +73,41 @@ def logout_user():
             supabase.auth.sign_out()
         except:
             pass
-    for key in ["user_id", "user_email", "leetcode_username", "recommendations", "sidebar_load_count"]:
+    for key in [
+        "user_id",
+        "user_email",
+        "leetcode_username",
+        "recommendations",
+        "sidebar_load_count",
+    ]:
         if key in st.session_state:
             del st.session_state[key]
+
 
 def get_user_profile(user_id):
     if not supabase:
         return None
     try:
-        res = supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+        res = (
+            supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+        )
         if res.data:
             return res.data[0]
     except:
         pass
     return None
 
+
 def update_leetcode_username(user_id, new_username):
     if not supabase:
         return
     try:
-        supabase.table("user_profiles").update({"leetcode_username": new_username}).eq("user_id", user_id).execute()
+        supabase.table("user_profiles").update({"leetcode_username": new_username}).eq(
+            "user_id", user_id
+        ).execute()
     except Exception as e:
         st.error(f"Update Error: {e}")
+
 
 def send_password_reset(email):
     """Send a password reset OTP to the user's email via Supabase."""
@@ -98,12 +119,15 @@ def send_password_reset(email):
     except Exception as e:
         return False, str(e)
 
+
 def verify_otp_and_reset(email, token, new_password):
     """Verify the OTP from email and set the new password."""
     if not supabase:
         return False, "Supabase not configured"
     try:
-        res = supabase.auth.verify_otp({"email": email, "token": token, "type": "recovery"})
+        res = supabase.auth.verify_otp(
+            {"email": email, "token": token, "type": "recovery"}
+        )
         if res and res.user:
             # OTP verified — session is active, now update password
             supabase.auth.update_user({"password": new_password})
@@ -137,7 +161,7 @@ CATEGORY_SEQUENCE = [
     "Dynamic Programming (DP)",
     "Bit Manipulation",
     "Math & Number Theory",
-    "Others"
+    "Others",
 ]
 
 # Maps LeetCode tags → our category + a priority (lower number = MORE specific = wins)
@@ -216,7 +240,7 @@ PATTERN_SEQUENCE = [
     "Shortest Path",
     "Dynamic Programming",
     "Bit Manipulation",
-    "Others"
+    "Others",
 ]
 
 # Maps LeetCode tags → DSA pattern + priority (lower = more specific = wins)
@@ -268,35 +292,48 @@ PATTERN_MAPPING = {
     "Hash Table": ("Hashing (Map/Set)", 25),
 }
 
+
 # ── Structured Output Models ───────────────────────────────────
 class DSAQuestion(BaseModel):
     title: str = Field(description="The title of the LeetCode question")
     leetcode_link: str = Field(description="A valid URL to the question on LeetCode")
-    why_it_matters: str = Field(description="One line on why this question is important or frequently asked")
-    description: str = Field(description="Clear and concise problem description in exactly 3 lines")
-    companies: List[str] = Field(description="A list of 3-5 top tech companies that frequently ask this question (e.g. ['Google', 'Amazon', 'Meta'])")
+    why_it_matters: str = Field(
+        description="One line on why this question is important or frequently asked"
+    )
+    description: str = Field(
+        description="Clear and concise problem description in exactly 3 lines"
+    )
+    companies: List[str] = Field(
+        description="A list of 3-5 top tech companies that frequently ask this question (e.g. ['Google', 'Amazon', 'Meta'])"
+    )
+
 
 class DSAQuestionList(BaseModel):
     questions: List[DSAQuestion]
 
+
 # Bind the model
 structured_llm = llm.with_structured_output(DSAQuestionList)
 
+
 # ── Helper Functions ─────────────────────────────────────────
 def normalize_title(title: str) -> str:
-    return re.sub(r'[^a-z0-9]', '', title.lower())
+    return re.sub(r"[^a-z0-9]", "", title.lower())
+
 
 def is_fuzzy_match(title1: str, title2: str, threshold: float = 0.85) -> bool:
     return SequenceMatcher(None, title1, title2).ratio() > threshold
 
+
 def extract_slug_from_url(url: str) -> str:
-    match = re.search(r'leetcode\.com/problems/([^/]+)', url)
+    match = re.search(r"leetcode\.com/problems/([^/]+)", url)
     return match.group(1).lower() if match else ""
+
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_recent_solved_questions(username, limit=50):
     url = "https://leetcode.com/graphql"
-    query = '''
+    query = """
     query recentAcSubmissions($username: String!, $limit: Int!) {
       recentAcSubmissionList(username: $username, limit: $limit) {
         title
@@ -304,19 +341,18 @@ def get_recent_solved_questions(username, limit=50):
         timestamp
       }
     }
-    '''
-    variables = {
-        "username": username,
-        "limit": limit
-    }
+    """
+    variables = {"username": username, "limit": limit}
     try:
-        response = requests.post(url, json={"query": query, "variables": variables}, timeout=10)
+        response = requests.post(
+            url, json={"query": query, "variables": variables}, timeout=10
+        )
         response.raise_for_status()
         data = response.json()
-        
+
         if "errors" in data:
             return [], f"GraphQL Error: {data['errors'][0]['message']}"
-            
+
         if "data" in data and data["data"].get("recentAcSubmissionList") is not None:
             submissions = data["data"]["recentAcSubmissionList"]
             solved = []
@@ -329,7 +365,10 @@ def get_recent_solved_questions(username, limit=50):
                 if timestamp_str:
                     try:
                         from datetime import datetime
-                        date_str = datetime.fromtimestamp(int(timestamp_str)).strftime('%Y-%m-%d')
+
+                        date_str = datetime.fromtimestamp(int(timestamp_str)).strftime(
+                            "%Y-%m-%d"
+                        )
                     except:
                         pass
                 if title and slug and slug not in seen:
@@ -343,6 +382,7 @@ def get_recent_solved_questions(username, limit=50):
     except Exception as e:
         return [], f"Unexpected Error: {str(e)}"
 
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_raw_tags(slugs_key: str) -> dict:
     """Fetch raw topic tags for multiple slugs. Returns dict of slug -> list of tag names.
@@ -350,18 +390,20 @@ def _fetch_raw_tags(slugs_key: str) -> dict:
     slugs = slugs_key.split(",") if slugs_key else []
     if not slugs:
         return {}
-    
+
     url = "https://leetcode.com/graphql"
     result_map = {}
-    
+
     batch_size = 50
     for i in range(0, len(slugs), batch_size):
-        batch_slugs = slugs[i:i+batch_size]
+        batch_slugs = slugs[i : i + batch_size]
         query_parts = []
         for j, slug in enumerate(batch_slugs):
             alias = f"q_{j}"
-            query_parts.append(f'{alias}: question(titleSlug: "{slug}") {{ topicTags {{ name }} }}')
-        
+            query_parts.append(
+                f'{alias}: question(titleSlug: "{slug}") {{ topicTags {{ name }} }}'
+            )
+
         query = "query { " + " ".join(query_parts) + " }"
         try:
             response = requests.post(url, json={"query": query}, timeout=10)
@@ -378,8 +420,9 @@ def _fetch_raw_tags(slugs_key: str) -> dict:
             for slug in batch_slugs:
                 if slug not in result_map:
                     result_map[slug] = []
-    
+
     return result_map
+
 
 def _map_tags(slugs: List[str], mapping: dict, default: str = "Others") -> dict:
     """Map raw tags to a category/pattern using a priority-based mapping dict."""
@@ -399,48 +442,73 @@ def _map_tags(slugs: List[str], mapping: dict, default: str = "Others") -> dict:
         result[slug] = assigned
     return result
 
+
 def get_batched_question_categories(slugs: List[str]) -> dict:
     """Map slugs to our major DSA categories."""
     return _map_tags(slugs, CATEGORY_MAPPING)
+
 
 def get_batched_question_patterns(slugs: List[str]) -> dict:
     """Map slugs to DSA technique patterns."""
     return _map_tags(slugs, PATTERN_MAPPING)
 
+
 # ── Supabase Helpers ───────────────────────────────────────
 def get_user_solved_supabase(username):
-    if not supabase: return []
+    if not supabase:
+        return []
     try:
-        response = supabase.table("user_solved_questions").select("title_slug, title, topic, created_at").eq("username", username).execute()
-        
+        response = (
+            supabase.table("user_solved_questions")
+            .select("title_slug, title, topic, created_at")
+            .eq("username", username)
+            .execute()
+        )
+
         result = []
         for row in response.data:
             date_str = ""
             created_at = row.get("created_at")
             if created_at:
                 date_str = created_at.split("T")[0]
-            result.append({"slug": row["title_slug"], "title": row["title"], "topic": row.get("topic", "General"), "date": date_str})
+            result.append(
+                {
+                    "slug": row["title_slug"],
+                    "title": row["title"],
+                    "topic": row.get("topic", "General"),
+                    "date": date_str,
+                }
+            )
         return result
     except Exception as e:
         st.error(f"Supabase Fetch Error: {e}")
         return []
 
+
 def mark_question_solved_supabase(username, slug, title, topic="General"):
-    if not supabase: return
+    if not supabase:
+        return
     try:
-        supabase.table("user_solved_questions").insert({
-            "username": username,
-            "title_slug": slug,
-            "title": title,
-            "topic": topic
-        }).execute()
+        supabase.table("user_solved_questions").insert(
+            {"username": username, "title_slug": slug, "title": title, "topic": topic}
+        ).execute()
     except Exception as e:
         st.error(f"Supabase Insert Error: {e}")
 
+
 # ── Session State Initialization ─────────────────────────────
-for key, default in [("recommendations", []), ("sidebar_load_count", 10), ("user_id", None), ("user_email", None), ("leetcode_username", ""), ("reset_stage", "email"), ("reset_email", "")]:
+for key, default in [
+    ("recommendations", []),
+    ("sidebar_load_count", 10),
+    ("user_id", None),
+    ("user_email", None),
+    ("leetcode_username", ""),
+    ("reset_stage", "email"),
+    ("reset_email", ""),
+]:
     if key not in st.session_state:
         st.session_state[key] = default
+
 
 # Callback for the Already Attempted button
 def handle_already_attempted(idx, username, slug, title, topic):
@@ -449,11 +517,13 @@ def handle_already_attempted(idx, username, slug, title, topic):
     if 0 <= idx < len(st.session_state.recommendations):
         st.session_state.recommendations.pop(idx)
 
+
 # ── Page Config ──────────────────────────────────────────────
-st.set_page_config(page_title="DSA Prep Hub", page_icon="🧠", layout="centered")
+st.set_page_config(page_title="Prepped", page_icon="🧠", layout="centered")
 
 # ── Custom CSS ───────────────────────────────────────────────
-st.markdown("""
+st.markdown(
+    """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
@@ -596,32 +666,51 @@ st.markdown("""
     }
     .footer a { color: #a855f7; text-decoration: none; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # ── Header ───────────────────────────────────────────────────
-st.markdown("""
+st.markdown(
+    """
 <div class="hero">
-    <h1>🧠 DSA Prep Hub</h1>
+    <h1>🧠 Prepped</h1>
     <p>Find the most trending &amp; important DSA questions — powered by AI</p>
 </div>
 <div class="divider"></div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ══════════════════════════════════════════════════════════════
 # AUTH GATE: Show Login/Signup if not authenticated
 # ══════════════════════════════════════════════════════════════
 if not st.session_state.user_id:
-    st.markdown('<p class="auth-subtitle">Sign in to track your progress and get personalized recommendations</p>', unsafe_allow_html=True)
-    
-    auth_tab_login, auth_tab_signup, auth_tab_forgot = st.tabs(["🔑 Login", "✨ Sign Up", "🔒 Forgot Password"])
-    
+    st.markdown(
+        '<p class="auth-subtitle">Sign in to track your progress and get personalized recommendations</p>',
+        unsafe_allow_html=True,
+    )
+
+    auth_tab_login, auth_tab_signup, auth_tab_forgot = st.tabs(
+        ["🔑 Login", "✨ Sign Up", "🔒 Forgot Password"]
+    )
+
     with auth_tab_login:
         with st.form("login_form"):
-            login_email = st.text_input("Email", placeholder="you@example.com", key="login_email_input")
-            login_pass = st.text_input("Password", type="password", placeholder="••••••••", key="login_pass_input")
-            login_submit = st.form_submit_button("Login", use_container_width=True, type="primary")
-            
+            login_email = st.text_input(
+                "Email", placeholder="you@example.com", key="login_email_input"
+            )
+            login_pass = st.text_input(
+                "Password",
+                type="password",
+                placeholder="••••••••",
+                key="login_pass_input",
+            )
+            login_submit = st.form_submit_button(
+                "Login", use_container_width=True, type="primary"
+            )
+
             if login_submit:
                 if not login_email or not login_pass:
                     st.warning("Please fill in all fields.")
@@ -632,20 +721,40 @@ if not st.session_state.user_id:
                         st.session_state.user_email = user.email
                         profile = get_user_profile(user.id)
                         if profile:
-                            st.session_state.leetcode_username = profile.get("leetcode_username", "")
+                            st.session_state.leetcode_username = profile.get(
+                                "leetcode_username", ""
+                            )
                         st.success("✅ Logged in successfully!")
                         st.rerun()
                     else:
                         st.error(f"Login failed: {err}")
-    
+
     with auth_tab_signup:
         with st.form("signup_form"):
-            signup_email = st.text_input("Email", placeholder="you@example.com", key="signup_email_input")
-            signup_pass = st.text_input("Password", type="password", placeholder="Min 6 characters", key="signup_pass_input")
-            signup_pass2 = st.text_input("Confirm Password", type="password", placeholder="••••••••", key="signup_pass2_input")
-            signup_lc = st.text_input("LeetCode Username (optional)", placeholder="e.g. neetcode", key="signup_lc_input")
-            signup_submit = st.form_submit_button("Create Account", use_container_width=True, type="primary")
-            
+            signup_email = st.text_input(
+                "Email", placeholder="you@example.com", key="signup_email_input"
+            )
+            signup_pass = st.text_input(
+                "Password",
+                type="password",
+                placeholder="Min 6 characters",
+                key="signup_pass_input",
+            )
+            signup_pass2 = st.text_input(
+                "Confirm Password",
+                type="password",
+                placeholder="••••••••",
+                key="signup_pass2_input",
+            )
+            signup_lc = st.text_input(
+                "LeetCode Username (optional)",
+                placeholder="e.g. neetcode",
+                key="signup_lc_input",
+            )
+            signup_submit = st.form_submit_button(
+                "Create Account", use_container_width=True, type="primary"
+            )
+
             if signup_submit:
                 if not signup_email or not signup_pass:
                     st.warning("Email and password are required.")
@@ -654,7 +763,9 @@ if not st.session_state.user_id:
                 elif len(signup_pass) < 6:
                     st.error("Password must be at least 6 characters.")
                 else:
-                    user, err = signup_user(signup_email, signup_pass, signup_lc.strip())
+                    user, err = signup_user(
+                        signup_email, signup_pass, signup_lc.strip()
+                    )
                     if user:
                         st.session_state.user_id = user.id
                         st.session_state.user_email = user.email
@@ -667,11 +778,18 @@ if not st.session_state.user_id:
     with auth_tab_forgot:
         # ── Stage 1: Enter email to receive OTP ──
         if st.session_state.reset_stage == "email":
-            st.markdown('<p style="color:#9ca3af; font-size:0.9rem; margin-bottom:1rem;">Enter your registered email and we\'ll send you a one-time code to reset your password.</p>', unsafe_allow_html=True)
+            st.markdown(
+                '<p style="color:#9ca3af; font-size:0.9rem; margin-bottom:1rem;">Enter your registered email and we\'ll send you a one-time code to reset your password.</p>',
+                unsafe_allow_html=True,
+            )
             with st.form("forgot_email_form"):
-                reset_email = st.text_input("Email", placeholder="you@example.com", key="forgot_email_input")
-                send_otp_btn = st.form_submit_button("📧 Send OTP", use_container_width=True, type="primary")
-                
+                reset_email = st.text_input(
+                    "Email", placeholder="you@example.com", key="forgot_email_input"
+                )
+                send_otp_btn = st.form_submit_button(
+                    "📧 Send OTP", use_container_width=True, type="primary"
+                )
+
                 if send_otp_btn:
                     if not reset_email:
                         st.warning("Please enter your email.")
@@ -681,27 +799,48 @@ if not st.session_state.user_id:
                         if success:
                             st.session_state.reset_email = reset_email.strip()
                             st.session_state.reset_stage = "otp"
-                            st.success("✅ OTP sent! Check your email inbox (and spam folder).")
+                            st.success(
+                                "✅ OTP sent! Check your email inbox (and spam folder)."
+                            )
                             st.rerun()
                         else:
                             st.error(f"Failed to send OTP: {err}")
 
         # ── Stage 2: Enter OTP + new password ──
         elif st.session_state.reset_stage == "otp":
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div style="background: rgba(102,126,234,0.08); border: 1px solid rgba(102,126,234,0.2);
                         border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1rem;">
                 <p style="color:#c084fc; font-size:0.85rem; margin:0;">📬 OTP sent to <strong>{st.session_state.reset_email}</strong></p>
                 <p style="color:#9ca3af; font-size:0.78rem; margin:0.3rem 0 0 0;">Enter the code from your email and set a new password below.</p>
             </div>
-            """, unsafe_allow_html=True)
-            
+            """,
+                unsafe_allow_html=True,
+            )
+
             with st.form("otp_verify_form"):
-                otp_code = st.text_input("OTP Code", placeholder="Enter code from email", key="otp_code_input")
-                new_pass = st.text_input("New Password", type="password", placeholder="Min 6 characters", key="reset_new_pass")
-                new_pass2 = st.text_input("Confirm New Password", type="password", placeholder="••••••••", key="reset_new_pass2")
-                reset_btn = st.form_submit_button("🔐 Reset Password", use_container_width=True, type="primary")
-                
+                otp_code = st.text_input(
+                    "OTP Code",
+                    placeholder="Enter code from email",
+                    key="otp_code_input",
+                )
+                new_pass = st.text_input(
+                    "New Password",
+                    type="password",
+                    placeholder="Min 6 characters",
+                    key="reset_new_pass",
+                )
+                new_pass2 = st.text_input(
+                    "Confirm New Password",
+                    type="password",
+                    placeholder="••••••••",
+                    key="reset_new_pass2",
+                )
+                reset_btn = st.form_submit_button(
+                    "🔐 Reset Password", use_container_width=True, type="primary"
+                )
+
                 if reset_btn:
                     if not otp_code or not new_pass:
                         st.warning("Please fill in all fields.")
@@ -712,16 +851,14 @@ if not st.session_state.user_id:
                     else:
                         with st.spinner("Verifying OTP..."):
                             success, err = verify_otp_and_reset(
-                                st.session_state.reset_email,
-                                otp_code.strip(),
-                                new_pass
+                                st.session_state.reset_email, otp_code.strip(), new_pass
                             )
                         if success:
                             st.session_state.reset_stage = "done"
                             st.rerun()
                         else:
                             st.error(f"Reset failed: {err}")
-            
+
             col_back, col_resend = st.columns(2)
             with col_back:
                 if st.button("← Back", key="back_to_email", use_container_width=True):
@@ -729,7 +866,9 @@ if not st.session_state.user_id:
                     st.session_state.reset_email = ""
                     st.rerun()
             with col_resend:
-                if st.button("🔄 Resend OTP", key="resend_otp", use_container_width=True):
+                if st.button(
+                    "🔄 Resend OTP", key="resend_otp", use_container_width=True
+                ):
                     success, err = send_password_reset(st.session_state.reset_email)
                     if success:
                         st.success("OTP resent! Check your email.")
@@ -738,19 +877,30 @@ if not st.session_state.user_id:
 
         # ── Stage 3: Success ──
         elif st.session_state.reset_stage == "done":
-            st.markdown("""
+            st.markdown(
+                """
             <div style="text-align:center; padding: 2rem 0;">
                 <div style="font-size: 3rem; margin-bottom: 0.5rem;">✅</div>
                 <h3 style="color: #e2e8f0; font-weight: 700;">Password Reset Successful!</h3>
                 <p style="color: #9ca3af; font-size: 0.9rem;">You can now log in with your new password.</p>
             </div>
-            """, unsafe_allow_html=True)
-            if st.button("🔑 Go to Login", use_container_width=True, type="primary", key="go_to_login"):
+            """,
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "🔑 Go to Login",
+                use_container_width=True,
+                type="primary",
+                key="go_to_login",
+            ):
                 st.session_state.reset_stage = "email"
                 st.session_state.reset_email = ""
                 st.rerun()
 
-    st.markdown('<div class="footer">Built with ❤️ using LangChain &amp; Streamlit</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="footer">Built with ❤️ using LangChain &amp; Streamlit</div>',
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 # ══════════════════════════════════════════════════════════════
@@ -760,26 +910,31 @@ lc_username = st.session_state.leetcode_username
 
 # ── Sidebar: User Info & Settings ────────────────────────────
 with st.sidebar:
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="sidebar-user-card">
         <div class="email">👤 {st.session_state.user_email}</div>
-        <div class="role">DSA Prep Member</div>
+        <div class="role">Prepped Member</div>
     </div>
-    """, unsafe_allow_html=True)
-    
+    """,
+        unsafe_allow_html=True,
+    )
+
     with st.expander("⚙️ Profile Settings"):
-        new_lc = st.text_input("LeetCode Username", value=lc_username, key="profile_lc_input")
+        new_lc = st.text_input(
+            "LeetCode Username", value=lc_username, key="profile_lc_input"
+        )
         if st.button("Save", key="save_profile", use_container_width=True):
             update_leetcode_username(st.session_state.user_id, new_lc.strip())
             st.session_state.leetcode_username = new_lc.strip()
             lc_username = new_lc.strip()
             st.success("Saved!")
             st.rerun()
-    
+
     if st.button("🚪 Logout", use_container_width=True):
         logout_user()
         st.rerun()
-    
+
     st.markdown("---")
 
 # ── Sidebar Progress Tracker ─────────────────────────────────
@@ -790,78 +945,87 @@ if lc_username:
     username_clean = lc_username.strip()
     supa_solved = get_user_solved_supabase(username_clean)
     pub_solved, _ = get_recent_solved_questions(username_clean)
-    
+
     # Combine all unique slugs
     all_solved_questions = supa_solved + (pub_solved if pub_solved else [])
-    
+
     # Deduplicate by slug
     seen_sidebar_slugs = set()
     deduped_questions = []
     for q in all_solved_questions:
-        slug = q['slug']
+        slug = q["slug"]
         if slug not in seen_sidebar_slugs:
             seen_sidebar_slugs.add(slug)
             deduped_questions.append(q)
-    
+
     # Fetch categories
-    unique_slugs = list({q['slug'] for q in deduped_questions})
-    
+    unique_slugs = list({q["slug"] for q in deduped_questions})
+
     with st.sidebar:
         with st.spinner("Fetching categories & patterns..."):
             category_map = get_batched_question_categories(unique_slugs)
             pattern_map = get_batched_question_patterns(unique_slugs)
-    
+
     # Group into categories for the "By Category" tab
     grouped_solved = {cat: [] for cat in CATEGORY_SEQUENCE}
     for q in deduped_questions:
-        cat = category_map.get(q['slug'], "Others")
+        cat = category_map.get(q["slug"], "Others")
         if cat not in grouped_solved:
             grouped_solved[cat] = []
         grouped_solved[cat].append(q)
-    
+
     # Group into patterns for the "By Pattern" tab
     grouped_patterns = {pat: [] for pat in PATTERN_SEQUENCE}
     for q in deduped_questions:
-        pat = pattern_map.get(q['slug'], "Others")
+        pat = pattern_map.get(q["slug"], "Others")
         if pat not in grouped_patterns:
             grouped_patterns[pat] = []
         grouped_patterns[pat].append(q)
-                
+
     st.sidebar.title("📚 Your Progress")
-    
+
     if not deduped_questions:
         st.sidebar.info("No solved questions found yet!")
     else:
-        tab_latest, tab_category, tab_pattern = st.sidebar.tabs(["🕐 Latest", "📂 Category", "🧩 Pattern"])
-        
+        tab_latest, tab_category, tab_pattern = st.sidebar.tabs(
+            ["🕐 Latest", "📂 Category", "🧩 Pattern"]
+        )
+
         # ── Tab 1: Latest Questions ──────────────────────────
         with tab_latest:
             # Sort by date (newest first), questions without dates go to the end
             sorted_questions = sorted(
                 deduped_questions,
-                key=lambda q: q.get('date', '') or '0000-00-00',
-                reverse=True
+                key=lambda q: q.get("date", "") or "0000-00-00",
+                reverse=True,
             )
-            
+
             display_count = st.session_state.sidebar_load_count
             visible = sorted_questions[:display_count]
-            
+
             for q in visible:
-                date_str = q.get('date', '') or ''
-                cat_label = category_map.get(q['slug'], 'Others')
-                st.markdown(f"""
+                date_str = q.get("date", "") or ""
+                cat_label = category_map.get(q["slug"], "Others")
+                st.markdown(
+                    f"""
                 <div class="sidebar-item">
                     <a href="https://leetcode.com/problems/{q['slug']}/" target="_blank">{q['title']}</a>
                     <div class="sidebar-meta">{date_str} &nbsp; <span class="sidebar-cat-badge">{cat_label}</span></div>
                 </div>
-                """, unsafe_allow_html=True)
-            
+                """,
+                    unsafe_allow_html=True,
+                )
+
             if display_count < len(sorted_questions):
                 remaining = len(sorted_questions) - display_count
-                if st.button(f"Load More ({remaining} remaining)", key="load_more_sidebar", use_container_width=True):
+                if st.button(
+                    f"Load More ({remaining} remaining)",
+                    key="load_more_sidebar",
+                    use_container_width=True,
+                ):
                     st.session_state.sidebar_load_count += 10
                     st.rerun()
-        
+
         # ── Tab 2: By Category ───────────────────────────────
         with tab_category:
             for t in CATEGORY_SEQUENCE:
@@ -869,14 +1033,17 @@ if lc_username:
                 if questions:
                     with st.expander(f"{t} ({len(questions)})"):
                         for q in questions:
-                            date_str = q.get('date', '') or ''
-                            st.markdown(f"""
+                            date_str = q.get("date", "") or ""
+                            st.markdown(
+                                f"""
                             <div class="sidebar-item">
                                 <a href="https://leetcode.com/problems/{q['slug']}/" target="_blank">{q['title']}</a>
                                 <div class="sidebar-meta">{date_str}</div>
                             </div>
-                            """, unsafe_allow_html=True)
-        
+                            """,
+                                unsafe_allow_html=True,
+                            )
+
         # ── Tab 3: By Pattern ────────────────────────────────
         with tab_pattern:
             for p in PATTERN_SEQUENCE:
@@ -884,19 +1051,27 @@ if lc_username:
                 if questions:
                     with st.expander(f"{p} ({len(questions)})"):
                         for q in questions:
-                            date_str = q.get('date', '') or ''
-                            st.markdown(f"""
+                            date_str = q.get("date", "") or ""
+                            st.markdown(
+                                f"""
                             <div class="sidebar-item">
                                 <a href="https://leetcode.com/problems/{q['slug']}/" target="_blank">{q['title']}</a>
                                 <div class="sidebar-meta">{date_str}</div>
                             </div>
-                            """, unsafe_allow_html=True)
+                            """,
+                                unsafe_allow_html=True,
+                            )
 
-st.markdown('<div class="section-header"><div class="icon">📚</div><div class="text">Search Criteria</div></div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-header"><div class="icon">📚</div><div class="text">Search Criteria</div></div>',
+    unsafe_allow_html=True,
+)
 col1, col2 = st.columns(2)
 
 with col1:
-    topic = st.text_input("📚 DSA Topic", placeholder="e.g. Binary Trees, Graphs, DP...")
+    topic = st.text_input(
+        "📚 DSA Topic", placeholder="e.g. Binary Trees, Graphs, DP..."
+    )
 
 with col2:
     level = st.selectbox("🎯 Difficulty Level", ["Easy", "Medium", "Hard"])
@@ -919,7 +1094,7 @@ Selection Criteria (in order of priority):
 
 Ensure you return exactly {number} questions.
 """,
-    input_variables=["topic", "level" , "number", "avoid_instructions"],
+    input_variables=["topic", "level", "number", "avoid_instructions"],
 )
 
 # ── Action Button ────────────────────────────────────────────
@@ -931,32 +1106,38 @@ if st.button("🔍  Find Questions", use_container_width=True, type="primary"):
     else:
         with st.spinner("🔎 Searching and filtering questions..."):
             solved_data = []
-            
+
             if lc_username:
                 username = lc_username.strip()
-                
+
                 # 1. Fetch from Supabase Memory
                 supa_solved = get_user_solved_supabase(username)
-                
+
                 # 2. Fetch from Public API Baseline
                 pub_solved, error_msg = get_recent_solved_questions(username)
-                
+
                 if error_msg:
-                    st.toast(f"⚠️ Unable to fetch public LeetCode data. Reason: {error_msg}")
-                
+                    st.toast(
+                        f"⚠️ Unable to fetch public LeetCode data. Reason: {error_msg}"
+                    )
+
                 # Combine and deduplicate
                 combined = supa_solved + (pub_solved if pub_solved else [])
                 seen = set()
                 for item in combined:
-                    if item['slug'] not in seen:
-                        seen.add(item['slug'])
+                    if item["slug"] not in seen:
+                        seen.add(item["slug"])
                         solved_data.append(item)
-                        
-                st.success(f"✅ Found {len(solved_data)} total solved questions for `{username}` in memory & public profile. Filtering them out...")
+
+                st.success(
+                    f"✅ Found {len(solved_data)} total solved questions for `{username}` in memory & public profile. Filtering them out..."
+                )
 
             # Extract slugs and normalized titles for fast checking
-            solved_slugs = {item['slug'] for item in solved_data}
-            solved_titles_norm = [normalize_title(item['title']) for item in solved_data]
+            solved_slugs = {item["slug"] for item in solved_data}
+            solved_titles_norm = [
+                normalize_title(item["title"]) for item in solved_data
+            ]
 
             approved_questions = []
             attempts = 0
@@ -965,105 +1146,141 @@ if st.button("🔍  Find Questions", use_container_width=True, type="primary"):
             while len(approved_questions) < number and attempts < max_attempts:
                 attempts += 1
                 needed = number - len(approved_questions)
-                
+
                 avoid_instructions = ""
                 if approved_questions:
-                    avoid_instructions += "DO NOT RECOMMEND these already selected questions:\n"
+                    avoid_instructions += (
+                        "DO NOT RECOMMEND these already selected questions:\n"
+                    )
                     for q in approved_questions:
                         avoid_instructions += f"- {q.title}\n"
-                
+
                 if solved_data:
                     avoid_instructions += "\nCRITICAL: The user has already solved the following questions. DO NOT recommend them:\n"
-                    sample_solved = [item['title'] for item in solved_data[:50]]
+                    sample_solved = [item["title"] for item in solved_data[:50]]
                     for q in sample_solved:
                         avoid_instructions += f"- {q}\n"
-                        
+
                 prompt = template.format(
                     topic=topic,
                     level=level,
                     number=needed,
-                    avoid_instructions=avoid_instructions
+                    avoid_instructions=avoid_instructions,
                 )
-                
+
                 try:
                     result = structured_llm.invoke(prompt)
                     if not result or not result.questions:
                         continue
-                        
+
                     for q in result.questions:
                         if len(approved_questions) >= number:
                             break
-                            
+
                         q_slug = extract_slug_from_url(q.leetcode_link)
                         q_norm = normalize_title(q.title)
-                        
+
                         is_solved = False
-                        
+
                         if q_slug and q_slug in solved_slugs:
                             is_solved = True
-                            
+
                         if not is_solved:
                             for solved_norm in solved_titles_norm:
                                 if is_fuzzy_match(q_norm, solved_norm):
                                     is_solved = True
                                     break
-                                    
+
                         for existing_q in approved_questions:
-                            if is_fuzzy_match(q_norm, normalize_title(existing_q.title)):
+                            if is_fuzzy_match(
+                                q_norm, normalize_title(existing_q.title)
+                            ):
                                 is_solved = True
                                 break
 
                         if not is_solved:
                             approved_questions.append(q)
-                            
+
                 except Exception as e:
                     st.error(f"Error communicating with LLM: {str(e)}")
                     break
 
             if not approved_questions:
-                st.error("Failed to generate valid questions. The topic might be too narrow or all classic questions are already solved.")
+                st.error(
+                    "Failed to generate valid questions. The topic might be too narrow or all classic questions are already solved."
+                )
             else:
                 st.session_state.recommendations = approved_questions
 
 # ── Render Recommendations ───────────────────────────────────
 if st.session_state.recommendations:
-    st.markdown('<div class="section-header"><div class="icon">✨</div><div class="text">Your Custom Recommendations</div></div>', unsafe_allow_html=True)
-    
+    st.markdown(
+        '<div class="section-header"><div class="icon">✨</div><div class="text">Your Custom Recommendations</div></div>',
+        unsafe_allow_html=True,
+    )
+
     for i, q in enumerate(st.session_state.recommendations):
         with st.container():
-            companies_html = " ".join([f"<span class='company-badge'>{c}</span>" for c in q.companies]) if hasattr(q, 'companies') and q.companies else ""
-            
-            st.markdown(f"""
+            companies_html = (
+                " ".join(
+                    [f"<span class='company-badge'>{c}</span>" for c in q.companies]
+                )
+                if hasattr(q, "companies") and q.companies
+                else ""
+            )
+
+            st.markdown(
+                f"""
             <div class="result-box">
                 <h4>{q.title}</h4>
                 <div style="margin-bottom: 0.8rem;">{companies_html}</div>
                 <p><strong>Why it matters:</strong> {q.why_it_matters}</p>
                 <p><strong>Description:</strong><br/>{q.description}</p>
             </div>
-            """, unsafe_allow_html=True)
-            
+            """,
+                unsafe_allow_html=True,
+            )
+
             q_slug = extract_slug_from_url(q.leetcode_link)
             col_solve, col_done = st.columns(2)
-            
+
             with col_solve:
-                st.link_button("🔗 Solve on LeetCode", q.leetcode_link, use_container_width=True)
-            
+                st.link_button(
+                    "🔗 Solve on LeetCode", q.leetcode_link, use_container_width=True
+                )
+
             with col_done:
                 if lc_username:
-                    st.button("✅ Mark as Done",
-                             key=f"attempt_{q_slug}_{i}",
-                             on_click=handle_already_attempted,
-                             args=(i, lc_username.strip(), q_slug, q.title, topic.strip() if topic else "General"),
-                             use_container_width=True)
+                    st.button(
+                        "✅ Mark as Done",
+                        key=f"attempt_{q_slug}_{i}",
+                        on_click=handle_already_attempted,
+                        args=(
+                            i,
+                            lc_username.strip(),
+                            q_slug,
+                            q.title,
+                            topic.strip() if topic else "General",
+                        ),
+                        use_container_width=True,
+                    )
                 else:
-                    st.button("✅ Mark as Done", key=f"attempt_no_lc_{i}", disabled=True,
-                             use_container_width=True, help="Set your LeetCode username in Profile Settings to enable this")
-            
+                    st.button(
+                        "✅ Mark as Done",
+                        key=f"attempt_no_lc_{i}",
+                        disabled=True,
+                        use_container_width=True,
+                        help="Set your LeetCode username in Profile Settings to enable this",
+                    )
+
             st.markdown("<br/>", unsafe_allow_html=True)
 
 # ── Footer ───────────────────────────────────────────────────
-st.markdown("""
+st.markdown(
+    """
 <div class="footer">
     Built with ❤️ using LangChain &amp; Streamlit
 </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
