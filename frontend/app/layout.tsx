@@ -16,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <body className={`${inter.variable} ${outfit.variable} font-sans bg-[#0a0a0f] text-slate-200 antialiased min-h-screen`}>
         <div className="fixed inset-0 bg-[radial-gradient(circle_at_50%_50%,_rgba(102,126,234,0.05),_transparent)] pointer-events-none" />
         <div className="fixed inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none brightness-50" />

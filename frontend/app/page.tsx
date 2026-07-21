@@ -18,15 +18,22 @@ export default function Dashboard() {
     // Fetch user profile
     authApi.getCurrentUser()
       .then(res => setUser(res.data))
-      .catch(err => console.error("Failed to fetch user", err));
+      .catch(err => {
+        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+          // Normal if not logged in
+        } else {
+          console.error("Failed to fetch user", err);
+        }
+      });
 
     // Fetch recommendations
     questionApi.getRecommendations()
       .then((res) => setQuestions(res.data))
       .catch((err) => {
-        console.error(err);
         if (err.response && (err.response.status === 401 || err.response.status === 403)) {
           router.push("/login");
+        } else {
+          console.error(err);
         }
       })
       .finally(() => setLoading(false));

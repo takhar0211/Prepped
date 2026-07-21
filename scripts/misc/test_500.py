@@ -1,5 +1,7 @@
 import sys, os
 sys.path.insert(0, "/Users/amantakhar/Downloads/interview prep/Dsa_prep_hub")
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../server')))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "backend.settings")
 
 import django

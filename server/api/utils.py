@@ -2,10 +2,13 @@ import os
 import json
 import requests
 import traceback
+import logging
 from typing import List, Optional
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 # ── LLM Setup ─────────────────────────────────────────────
 gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -74,11 +77,28 @@ structured_llm = gemini_llm.with_structured_output(DSAQuestionListSchema)
 # CODE VALIDATION
 # ══════════════════════════════════════════════════════════════
 
+class TestResultSchema(BaseModel):
+    input: str
+    expected_output: str
+    actual_output: str
+    passed: bool
+
 class CodeValidationResult(BaseModel):
-    test_results: List[dict] = Field(description="List of test case results")
+    test_results: List[TestResultSchema] = Field(description="List of test case results")
     error_message: str = Field(description="Compilation or runtime error message if any")
     feedback: str = Field(description="Brief explanation of the bug if failed")
     all_passed: bool = Field(description="True if ALL test cases passed, False otherwise")
+
+class LLMTestResult(BaseModel):
+    input: str = Field(description="The test case input")
+    expected_output: str = Field(description="The expected output")
+    actual_output: str = Field(description="The output the code would produce")
+    passed: bool = Field(description="True if the code produces the correct output")
+
+class LLMJudgeResult(BaseModel):
+    verdict: str = Field(description="Must be exactly one of: 'correct', 'incorrect', or 'syntax_error'")
+    explanation: str = Field(description="Brief explanation of the result (1-2 sentences)")
+    test_results: List[LLMTestResult] = Field(description="Per-test-case breakdown with actual outputs")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -155,150 +175,162 @@ def generate_interview_questions(topic: str, subtopics: list, difficulty: str, n
 
 
 # ══════════════════════════════════════════════════════════════
+# TEST CASE GENERATION (cached in DB)
+# ══════════════════════════════════════════════════════════════
+
+def generate_test_cases_for_question(question) -> list:
+    """
+    Generate exactly 10 diverse test cases for a question using the LLM.
+    Saves them to question.test_cases in the database for caching.
+    Returns the list of test case dicts.
+    """
+    # If already have 10+ test cases, return them
+    if question.test_cases and len(question.test_cases) >= 10:
+        return question.test_cases
+
+    examples_str = ""
+    for i, ex in enumerate(question.examples or []):
+        examples_str += f"  Example {i+1}: Input: {ex.get('input', '')} | Output: {ex.get('output', '')}\n"
+
+    prompt = f"""You are a test case generator for coding problems. Generate exactly 10 diverse test cases for the following problem.
+
+PROBLEM:
+{question.description}
+
+CONSTRAINTS:
+{question.constraints}
+
+EXISTING EXAMPLES:
+{examples_str}
+
+RULES:
+1. Generate EXACTLY 10 test cases
+2. Include the existing examples as the first test cases (reformatted to match)
+3. Cover: normal cases, edge cases (empty input, single element, minimum values), boundary cases (max constraints), and tricky/adversarial cases
+4. The input format MUST match the existing examples exactly (e.g., if examples use 's = "hello"', your test cases must too)
+5. The expected_output must be the CORRECT answer for each test case
+6. Do NOT include explanations in the test cases, only input and expected_output
+"""
+
+    class GeneratedTestCases(BaseModel):
+        test_cases: List[TestCaseSchema] = Field(description="Exactly 10 test cases")
+
+    try:
+        tc_llm = gemini_llm.with_structured_output(GeneratedTestCases)
+        result = tc_llm.invoke(prompt)
+        test_cases = [tc.model_dump() for tc in result.test_cases][:10]
+
+        # Save to database
+        question.test_cases = test_cases
+        question.save(update_fields=['test_cases'])
+
+        logger.info(f"[TestCaseGen] Generated and cached {len(test_cases)} test cases for question '{question.title}' (id={question.id})")
+        return test_cases
+    except Exception as e:
+        logger.error(f"[TestCaseGen] Failed to generate test cases for question '{question.title}': {e}")
+        traceback.print_exc()
+        # Return whatever we have (examples as fallback)
+        fallback = [
+            {"input": ex.get("input", ""), "expected_output": ex.get("output", "")}
+            for ex in (question.examples or [])
+        ]
+        return fallback
+
+
+# ══════════════════════════════════════════════════════════════
 # CODE VALIDATION (LLM-based)
 # ══════════════════════════════════════════════════════════════
 
-import subprocess
-import tempfile
-import hashlib
+judge_llm = gemini_llm.with_structured_output(LLMJudgeResult)
 
-WRAPPER_CACHE = {}
+CODE_JUDGE_SYSTEM_PROMPT = """You are a strict, deterministic code judge. You are given a coding problem, a candidate's solution in a specific programming language, and a set of test cases.
 
-def validate_code(code: str, language: str, test_cases: list, question_description: str):
+Your job:
+1. SYNTAX CHECK: First, check if the code has any syntax errors. If yes, set verdict to "syntax_error" and explain the error. Set all test results to failed with actual_output describing the syntax error.
+2. MENTAL EXECUTION: If the code is syntactically valid, mentally execute it against EACH test case step-by-step. Be extremely precise — trace through loops, conditions, and edge cases carefully.
+3. VERDICT: 
+   - "correct" if ALL test cases pass
+   - "incorrect" if ANY test case fails
+   - "syntax_error" if the code cannot compile/parse
+
+CRITICAL RULES:
+- You MUST evaluate EVERY test case and report the result for each one.
+- For each test case, determine what the code ACTUALLY outputs (not what it should output).
+- Be precise with output format: if the expected output is "[0,1]", the actual output must match exactly (e.g., "[1,0]" is WRONG unless the problem says order doesn't matter).
+- Do NOT be lenient. If the code has a bug, catch it.
+- Do NOT execute or modify the code. Only analyze it mentally.
+- The actual_output field should contain what the code WOULD produce if executed, or an error message if it would crash.
+- Be language-aware: understand the syntax and semantics of the specified programming language."""
+
+
+def validate_code_with_llm(code: str, language: str, test_cases: list, question_description: str) -> CodeValidationResult:
     """
-    Highly optimized validation: 
-    1. Caches driver code templates so LLM is only called ONCE per question.
-    2. Uses local subprocess execution instead of LLM mental tracing or blocked Piston API.
-    3. Drops LLM-based feedback to save API quota.
+    Validate user code by having the LLM mentally execute it against test cases.
+    Returns a CodeValidationResult with the same shape as the old subprocess-based validator.
     """
-    # Create a deterministic cache key for the driver code
-    cache_key = hashlib.md5((str(test_cases) + language).encode()).hexdigest()
-    
-    if cache_key in WRAPPER_CACHE:
-        wrapper_template = WRAPPER_CACHE[cache_key]
-    else:
-        # Ask LLM to generate just the template with a placeholder
-        wrapper_prompt = f"""You are an expert code generator. Generate a fully runnable {language} script TEMPLATE that runs a user's function against test cases.
-TEST CASES:
-{json.dumps([{"input": tc.get("input")} for tc in test_cases])}
+    logger.info(f"[LLM Judge] Validating {language} code against {len(test_cases)} test cases")
 
-REQUIREMENTS:
-1. The script MUST include exactly this placeholder string where the user's code will go: <USER_CODE_HERE>
-2. Add a main execution block that parses the test case inputs and calls the user's function.
-3. For each test case, print the return value to standard output. Format lists/arrays identically to standard JSON.
-4. After printing the return value for a test case, print EXACTLY the string "---TEST_DELIMITER---" on a new line.
-5. RETURN ONLY THE RAW RUNNABLE CODE. No markdown backticks, no explanations.
-"""
-        try:
-            wrapper_template = gemini_llm.invoke(wrapper_prompt).content.strip()
-            if wrapper_template.startswith("```"):
-                wrapper_template = "\n".join(wrapper_template.split("\n")[1:])
-                if wrapper_template.endswith("```"):
-                    wrapper_template = wrapper_template[:-3]
-            
-            # Failsafe if LLM forgot the placeholder
-            if "<USER_CODE_HERE>" not in wrapper_template:
-                wrapper_template = "<USER_CODE_HERE>\n" + wrapper_template
-                
-            WRAPPER_CACHE[cache_key] = wrapper_template
-        except Exception as e:
-            print(f"Error generating wrapper: {e}")
-            return CodeValidationResult(test_results=[], error_message="API Rate Limit Reached (15 requests/min). Please wait 30 seconds and click Run again.", feedback="", all_passed=False)
-            
-    # Inject user code into the cached template
-    wrapper_code = wrapper_template.replace("<USER_CODE_HERE>", code)
-    
-    # Execute Locally via Subprocess (Extremely fast, 0 API quota, ignores firewall)
-    stdout, stderr = "", ""
-    compile_err = ""
-    
-    try:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            if language.lower() == "python":
-                file_path = os.path.join(temp_dir, "solution.py")
-                with open(file_path, "w") as f: f.write(wrapper_code)
-                proc = subprocess.run(["python3", file_path], capture_output=True, text=True, timeout=5)
-                stdout, stderr = proc.stdout, proc.stderr
-                
-            elif language.lower() == "cpp":
-                file_path = os.path.join(temp_dir, "solution.cpp")
-                out_path = os.path.join(temp_dir, "out")
-                with open(file_path, "w") as f: f.write(wrapper_code)
-                c_proc = subprocess.run(["g++", "-std=c++17", file_path, "-o", out_path], capture_output=True, text=True, timeout=5)
-                if c_proc.returncode != 0:
-                    compile_err = c_proc.stderr
-                else:
-                    proc = subprocess.run([out_path], capture_output=True, text=True, timeout=5)
-                    stdout, stderr = proc.stdout, proc.stderr
-                    
-            elif language.lower() == "java":
-                file_path = os.path.join(temp_dir, "Main.java")
-                with open(file_path, "w") as f: f.write(wrapper_code)
-                c_proc = subprocess.run(["javac", file_path], capture_output=True, text=True, timeout=5)
-                if c_proc.returncode != 0:
-                    compile_err = c_proc.stderr
-                else:
-                    proc = subprocess.run(["java", "-cp", temp_dir, "Main"], capture_output=True, text=True, timeout=5)
-                    stdout, stderr = proc.stdout, proc.stderr
-                    
-            elif language.lower() == "javascript":
-                file_path = os.path.join(temp_dir, "solution.js")
-                with open(file_path, "w") as f: f.write(wrapper_code)
-                proc = subprocess.run(["node", file_path], capture_output=True, text=True, timeout=5)
-                stdout, stderr = proc.stdout, proc.stderr
-            else:
-                return CodeValidationResult(test_results=[], error_message=f"Language {language} not supported for local execution.", feedback="", all_passed=False)
-                
-    except subprocess.TimeoutExpired:
-        return CodeValidationResult(test_results=[], error_message="Execution Timed Out (Possible Infinite Loop)", feedback="", all_passed=False)
-    except Exception as e:
-        return CodeValidationResult(test_results=[], error_message=str(e), feedback="", all_passed=False)
-
-    if compile_err:
-        return CodeValidationResult(
-            test_results=[], 
-            error_message=compile_err, 
-            feedback="Your code failed to compile. Please check syntax.", 
-            all_passed=False
-        )
-        
-    outputs = stdout.split("---TEST_DELIMITER---")
-    results = []
-    all_passed = True
-    
-    from pydantic import BaseModel
-    class MockTestResult(BaseModel):
-        input: str
-        expected_output: str
-        actual_output: str
-        passed: bool
-        
+    # Format test cases for the prompt
+    test_cases_str = ""
     for i, tc in enumerate(test_cases):
-        actual = outputs[i].strip() if i < len(outputs) else ""
-        if not actual and stderr:
-            actual = stderr.strip()
-            
-        expected = str(tc.get("expected_output", "")).strip()
-        passed = expected.replace(" ", "") == actual.replace(" ", "")
-        if not passed:
-            all_passed = False
-            
-        results.append(MockTestResult(
-            input=tc.get("input", ""),
-            expected_output=expected,
-            actual_output=actual,
-            passed=passed
-        ))
-        
-    # Manual feedback instead of hitting the LLM API again
-    feedback = "All test cases passed!" if all_passed else "Your solution failed one or more test cases. Please review your logic."
-        
-    return CodeValidationResult(
-        test_results=results, 
-        error_message=stderr.strip() if not results else "", 
-        feedback=feedback, 
-        all_passed=all_passed
-    )
+        test_cases_str += f"Test Case {i+1}:\n  Input: {tc.get('input', '')}\n  Expected Output: {tc.get('expected_output', '')}\n\n"
+
+    prompt = f"""{CODE_JUDGE_SYSTEM_PROMPT}
+
+PROBLEM DESCRIPTION:
+{question_description}
+
+CANDIDATE'S CODE ({language}):
+```{language}
+{code}
+```
+
+TEST CASES ({len(test_cases)} total):
+{test_cases_str}
+
+Evaluate the code against ALL test cases and return your structured verdict."""
+
+    try:
+        result: LLMJudgeResult = judge_llm.invoke(prompt)
+
+        # Convert LLMJudgeResult to CodeValidationResult (preserving frontend contract)
+        converted_results = []
+        for tr in result.test_results:
+            converted_results.append(TestResultSchema(
+                input=tr.input,
+                expected_output=tr.expected_output,
+                actual_output=tr.actual_output,
+                passed=tr.passed,
+            ))
+
+        # Compute all_passed from individual results (don't trust LLM's verdict alone)
+        all_passed = len(converted_results) > 0 and all(tr.passed for tr in converted_results)
+
+        # Determine error message and feedback
+        error_message = ""
+        if result.verdict == "syntax_error":
+            error_message = result.explanation
+            feedback = "Your code has a syntax error. Please fix it and try again."
+        elif not all_passed:
+            feedback = result.explanation or "Your solution failed one or more test cases. Please review your logic."
+        else:
+            feedback = ""
+
+        return CodeValidationResult(
+            test_results=converted_results,
+            error_message=error_message,
+            feedback=feedback,
+            all_passed=all_passed,
+        )
+    except Exception as e:
+        logger.error(f"[LLM Judge] Validation failed: {e}")
+        traceback.print_exc()
+        return CodeValidationResult(
+            test_results=[],
+            error_message=f"Validation engine error: {str(e)}",
+            feedback="The code judge encountered an error. Please try again.",
+            all_passed=False,
+        )
 
 
 # ══════════════════════════════════════════════════════════════
